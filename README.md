@@ -9,7 +9,6 @@ docker run -d \
   -e TZ=Asia/Shanghai \
   -e DATA_DIR=/data \
   -e HTTP_ADDR=:8080 \
-  -v ./data:/data:rw \
-  media-go:latest
+  -v !!!YOUR!!!/data:/data:rw \
+  ghcr.io/samuel-0-0/media-go:latest
   ```
-  
