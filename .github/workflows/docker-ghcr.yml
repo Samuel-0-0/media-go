@@ -1,64 +1,167 @@
-name: Build and Push Docker Image to GHCR
+name: Docker GHCR
 
 on:
   push:
     branches:
-      - main                  # 推送到 main 分支时自动触发（可按需改为 master）
+      - main
     tags:
-      - 'v*.*.*'              # 推送版本 Tag 时自动触发 (例如 v1.0.0)
+      - "v*"
   pull_request:
-    branches:
-      - main                  # PR 时仅执行构建校验，不推送到仓库
-  workflow_dispatch:          # 允许在 GitHub 网页界面手动点击运行
+  workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  # 镜像名称格式：ghcr.io/<用户名或组织名>/<仓库名>（自动转小写）
-  IMAGE_NAME: ${{ github.repository }}
+permissions:
+  contents: read
+  packages: write
 
 jobs:
-  build-and-push:
+  build-and-publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write         # 必须具备 packages 写入权限才能推送到 ghcr.io
-
     steps:
-      - name: Checkout repository
+      - name: Check out workflow and prebuilt binaries
         uses: actions/checkout@v4
 
-      # 设置 Buildx 构建器
+      - name: Prepare precompiled multi-architecture build context
+        shell: bash
+        run: |
+          mkdir -p build/ghcr
+          cp docker-binaries/mediago-linux-amd64 build/ghcr/
+          cp docker-binaries/mediago-linux-arm64 build/ghcr/
+          cat > build/ghcr/requirements-spider.txt <<'REQUIREMENTS'
+          requests==2.34.2
+          lxml==6.1.3
+          pycryptodome==4.0.1
+          beautifulsoup4==4.15.0
+          pyquery==2.1.0
+          cssselect==1.6.0
+          certifi==2026.7.22
+          charset-normalizer==3.5.2
+          idna==3.20
+          urllib3==2.8.0
+          soupsieve==3.0.3
+          typing-extensions==4.16.0
+          REQUIREMENTS
+          cat > build/ghcr/docker-healthcheck.py <<'HEALTHCHECK'
+          import json
+          import http.client
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          state = Path("/tmp/mediago-healthcheck.json")
+          try:
+              if "--snapshot" in sys.argv:
+                  address = os.environ.get("HTTP_ADDR", "")
+                  if not address:
+                      try:
+                          settings = json.loads((Path(os.environ.get("DATA_DIR") or "/data") / "settings.json").read_text())
+                          address = settings.get("values", {}).get("HTTP_ADDR", ":8080")
+                      except FileNotFoundError:
+                          address = ":8080"
+                  if address.startswith("["):
+                      match = re.fullmatch(r"\[([^\[\]]+)\]:([0-9]+)", address)
+                      if not match:
+                          raise ValueError()
+                      host, port = match.groups()
+                      host = "[::1]" if host == "::" else f"[{host}]"
+                  else:
+                      match = re.fullmatch(r"([A-Za-z0-9_.-]*):([0-9]+)", address)
+                      if not match:
+                          raise ValueError()
+                      host, port = match.groups()
+                      host = "127.0.0.1" if host in ("", "0.0.0.0") else host
+                  if not 1 <= int(port) <= 65535:
+                      raise ValueError()
+                  state.write_text(json.dumps({"url": f"http://{host}:{int(port)}/healthz"}))
+              else:
+                  snapshot = json.loads(state.read_text())
+                  with urllib.request.urlopen(snapshot["url"], timeout=3) as response:
+                      if response.status != 200 or json.loads(response.read(4096)).get("status") != "ok":
+                          raise ValueError()
+          except (OSError, ValueError, KeyError, TypeError, AttributeError, urllib.error.URLError, TimeoutError, http.client.HTTPException):
+              sys.exit(1)
+          HEALTHCHECK
+          cat > build/ghcr/docker-entrypoint.sh <<'ENTRYPOINT'
+          #!/bin/sh
+          set -eu
+          /opt/venv/bin/python /app/docker-healthcheck.py --snapshot
+          exec /usr/bin/tini -g -- /app/anime-go "$@"
+          ENTRYPOINT
+          cat > build/ghcr/Dockerfile <<'DOCKERFILE'
+          # syntax=docker/dockerfile:1.7
+          FROM node:22-trixie-slim
+          RUN apt-get update \
+              && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                  ca-certificates tzdata tini libstdc++6 libatomic1 python3 python3-venv \
+              && python3 -m venv /opt/venv \
+              && apt-get clean \
+              && rm -rf /var/lib/apt/lists/*
+          COPY requirements-spider.txt /opt/mediago/requirements-spider.txt
+          RUN --mount=type=cache,target=/root/.cache/pip \
+              /opt/venv/bin/python -m pip install --only-binary=:all: \
+                  --disable-pip-version-check -r /opt/mediago/requirements-spider.txt \
+              && /opt/venv/bin/python -m pip check
+          RUN groupadd --gid 1000 app \
+              && useradd --uid 1000 --gid app --create-home --shell /usr/sbin/nologin app \
+              && mkdir -p /data/downloads \
+              && chown -R app:app /data
+          ENV PATH="/opt/venv/bin:${PATH}" \
+              DATA_DIR=/data \
+              PYTHONUNBUFFERED=1 \
+              PYTHONDONTWRITEBYTECODE=1 \
+              LANG=C.UTF-8
+          WORKDIR /app
+          ARG TARGETARCH
+          COPY --chmod=755 mediago-linux-${TARGETARCH} /app/anime-go
+          COPY docker-healthcheck.py /app/docker-healthcheck.py
+          COPY --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
+          USER app
+          EXPOSE 8080
+          HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+              CMD ["/opt/venv/bin/python", "/app/docker-healthcheck.py"]
+          ENTRYPOINT ["/app/docker-entrypoint.sh"]
+          VOLUME ["/data"]
+          DOCKERFILE
+
+      - name: Set image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 登录到 GitHub Container Registry (使用内置 GITHUB_TOKEN，无需手动配 Secret)
-      - name: Log in to the Container registry
+      - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 自动生成镜像标签 (main分支对应 latest，tag 对应具体版本)
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Build and publish multi-architecture image
+        uses: docker/build-push-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      # 构建并推送镜像
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
+          context: build/ghcr
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
