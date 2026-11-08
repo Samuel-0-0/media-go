@@ -23,23 +23,24 @@ jobs:
       - name: Prepare precompiled multi-architecture build context
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p build/ghcr
+
+          for required_file in \
+            docker-binaries/mediago-linux-amd64 \
+            docker-binaries/mediago-linux-arm64 \
+            docker-binaries/Dockerfile.template \
+            docker-binaries/requirements-spider.txt; do
+            if [ ! -f "$required_file" ]; then
+              echo "::error::Missing required file: $required_file"
+              exit 1
+            fi
+          done
+
           cp docker-binaries/mediago-linux-amd64 build/ghcr/
           cp docker-binaries/mediago-linux-arm64 build/ghcr/
-          cat > build/ghcr/requirements-spider.txt <<'REQUIREMENTS'
-          requests==2.34.2
-          lxml==6.1.3
-          pycryptodome==4.0.1
-          beautifulsoup4==4.15.0
-          pyquery==2.1.0
-          cssselect==1.6.0
-          certifi==2026.7.22
-          charset-normalizer==3.5.2
-          idna==3.20
-          urllib3==2.8.0
-          soupsieve==3.0.3
-          typing-extensions==4.16.0
-          REQUIREMENTS
+          tr -d '\r' < docker-binaries/requirements-spider.txt > build/ghcr/requirements-spider.txt
+
           cat > build/ghcr/docker-healthcheck.py <<'HEALTHCHECK'
           import json
           import http.client
@@ -83,50 +84,78 @@ jobs:
           except (OSError, ValueError, KeyError, TypeError, AttributeError, urllib.error.URLError, TimeoutError, http.client.HTTPException):
               sys.exit(1)
           HEALTHCHECK
+
           cat > build/ghcr/docker-entrypoint.sh <<'ENTRYPOINT'
           #!/bin/sh
           set -eu
           /opt/venv/bin/python /app/docker-healthcheck.py --snapshot
           exec /usr/bin/tini -g -- /app/anime-go "$@"
           ENTRYPOINT
-          cat > build/ghcr/Dockerfile <<'DOCKERFILE'
-          # syntax=docker/dockerfile:1.7
-          FROM node:22-trixie-slim AS node-runtime
-          FROM debian:trixie-slim AS runtime-base
-          RUN apt-get update \
-              && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                  ca-certificates tzdata tini libstdc++6 libatomic1 python3 python3-venv \
-              && python3 -m venv /opt/venv \
-              && apt-get clean \
-              && rm -rf /var/lib/apt/lists/*
-          COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-          COPY --from=node-runtime /usr/local/LICENSE /usr/share/licenses/node/LICENSE
-          COPY requirements-spider.txt /opt/mediago/requirements-spider.txt
-          RUN --mount=type=cache,target=/root/.cache/pip \
-              /opt/venv/bin/python -m pip install --only-binary=:all: \
-                  --disable-pip-version-check -r /opt/mediago/requirements-spider.txt \
-              && /opt/venv/bin/python -m pip check
-          RUN groupadd --gid 1000 app \
-              && useradd --uid 1000 --gid app --create-home --shell /usr/sbin/nologin app \
-              && mkdir -p /data/downloads \
-              && chown -R app:app /data
-          ENV PATH="/opt/venv/bin:${PATH}" \
-              DATA_DIR=/data \
-              PYTHONUNBUFFERED=1 \
-              PYTHONDONTWRITEBYTECODE=1 \
-              LANG=C.UTF-8
-          WORKDIR /app
-          ARG TARGETARCH
-          COPY --chmod=755 mediago-linux-${TARGETARCH} /app/anime-go
-          COPY docker-healthcheck.py /app/docker-healthcheck.py
-          COPY --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
-          USER app
-          EXPOSE 8080
-          HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-              CMD ["/opt/venv/bin/python", "/app/docker-healthcheck.py"]
-          ENTRYPOINT ["/app/docker-entrypoint.sh"]
-          VOLUME ["/data"]
-          DOCKERFILE
+
+          cat > build/ghcr/verify-runtime.py <<'RUNTIME_CHECK'
+          import argparse
+          import shutil
+          import subprocess
+          import sys
+
+          def main():
+              parser = argparse.ArgumentParser()
+              parser.add_argument("--dependencies-only", action="store_true")
+              parser.add_argument("--node", default="node")
+              parser.add_argument("--version")
+              options = parser.parse_args()
+
+              if sys.version_info < (3, 10):
+                  raise AssertionError("Python 3.10 or later is required")
+              import requests
+              from bs4 import BeautifulSoup
+              from Crypto.Cipher import AES
+              from Crypto.Util.Padding import pad, unpad
+              from lxml import html
+              from lxml.cssselect import CSSSelector
+              from pyquery import PyQuery
+
+              assert PyQuery("<ul><li>MediaGo fixture</li></ul>")("li").text() == "MediaGo fixture"
+              key, iv, message = b"0123456789abcdef", b"fedcba9876543210", b"MediaGo AES fixture"
+              encrypted = AES.new(key, AES.MODE_CBC, iv).encrypt(pad(message, AES.block_size))
+              assert unpad(AES.new(key, AES.MODE_CBC, iv).decrypt(encrypted), AES.block_size) == message
+              subprocess.run([options.node, "--version"], capture_output=True, text=True, timeout=30, check=True)
+              for tool in ("ffmpeg", "ffprobe", "fpcalc"):
+                  if shutil.which(tool) is not None:
+                      subprocess.run([tool, "-version"], capture_output=True, timeout=30, check=True)
+              print("Docker runtime dependencies verified: OK")
+
+          if __name__ == "__main__":
+              main()
+          RUNTIME_CHECK
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read_lf(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+          template = read_lf("docker-binaries/Dockerfile.template")
+          replacements = {
+              "@@PYTHON_REQUIREMENTS@@": read_lf("build/ghcr/requirements-spider.txt").rstrip("\n"),
+              "@@HEALTHCHECK@@": read_lf("build/ghcr/docker-healthcheck.py").rstrip("\n"),
+              "@@ENTRYPOINT@@": read_lf("build/ghcr/docker-entrypoint.sh").rstrip("\n"),
+              "@@RUNTIME_CHECK@@": read_lf("build/ghcr/verify-runtime.py").rstrip("\n"),
+          }
+          for marker, content in replacements.items():
+              template = template.replace(marker, content)
+
+          unresolved = re.findall(r"@@[A-Z_]+@@", template)
+          if unresolved:
+              raise SystemExit(f"Unresolved Dockerfile.template markers: {unresolved}")
+
+          if not template.lstrip().startswith("# syntax="):
+              template = "# syntax=docker/dockerfile:1.7\n" + template
+
+          Path("build/ghcr/Dockerfile").write_text(template, encoding="utf-8")
+          print("Rendered build/ghcr/Dockerfile successfully from docker-binaries/Dockerfile.template")
+          PY
 
       - name: Set image name
         id: image
