@@ -27,19 +27,19 @@ jobs:
           mkdir -p build/ghcr
 
           for required_file in \
-            docker-binaries/mediago-linux-amd64 \
-            docker-binaries/mediago-linux-arm64 \
-            docker-binaries/Dockerfile.template \
-            docker-binaries/requirements-spider.txt; do
+            docker/mediago-linux-amd64 \
+            docker/mediago-linux-arm64 \
+            docker/Dockerfile.template \
+            docker/requirements-spider.txt; do
             if [ ! -f "$required_file" ]; then
               echo "::error::Missing required file: $required_file"
               exit 1
             fi
           done
 
-          cp docker-binaries/mediago-linux-amd64 build/ghcr/
-          cp docker-binaries/mediago-linux-arm64 build/ghcr/
-          tr -d '\r' < docker-binaries/requirements-spider.txt > build/ghcr/requirements-spider.txt
+          cp docker/mediago-linux-amd64 build/ghcr/
+          cp docker/mediago-linux-arm64 build/ghcr/
+          tr -d '\r' < docker/requirements-spider.txt > build/ghcr/requirements-spider.txt
 
           cat > build/ghcr/docker-healthcheck.py <<'HEALTHCHECK'
           import json
@@ -136,7 +136,7 @@ jobs:
           def read_lf(path: str) -> str:
               return Path(path).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
-          template = read_lf("docker-binaries/Dockerfile.template")
+          template = read_lf("docker/Dockerfile.template")
           # Ensure default DEBIAN_MIRROR uses http:// before ca-certificates is installed in debian:trixie-slim
           template = template.replace(
               "ARG DEBIAN_MIRROR=https://deb.debian.org",
@@ -159,7 +159,7 @@ jobs:
               template = "# syntax=docker/dockerfile:1.7\n" + template
 
           Path("build/ghcr/Dockerfile").write_text(template, encoding="utf-8")
-          print("Rendered build/ghcr/Dockerfile successfully from docker-binaries/Dockerfile.template")
+          print("Rendered build/ghcr/Dockerfile successfully from docker/Dockerfile.template")
           PY
 
       - name: Set image name
