@@ -17,7 +17,7 @@ RUN set -eu; \
     sed -i -E "s#https?://deb.debian.org#${bootstrap_mirror}#g" /etc/apt/sources.list.d/debian.sources; \
     apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates tzdata tini libstdc++6 libatomic1 ffmpeg libchromaprint-tools python3 python3-venv default-jdk-headless enjarify libandroid-json-java libjsoup-java libgoogle-gson-java libokhttp-java \
+        ca-certificates tzdata tini libstdc++6 libatomic1 ffmpeg libchromaprint-tools chromium xvfb xauth python3 python3-venv default-jdk-headless enjarify libandroid-json-java libjsoup-java libgoogle-gson-java libokhttp-java \
     && sed -i -E "s#https?://[^/[:space:]]+#${DEBIAN_MIRROR}#g" /etc/apt/sources.list.d/debian.sources \
     && python3 -m venv /opt/venv \
     && apt-get clean \
@@ -36,9 +36,12 @@ RUN groupadd --gid 1000 app \
     && mkdir -p /data/downloads \
     && chown -R app:app /data
 ENV PATH="/opt/venv/bin:${PATH}" \
+    PORT=8080 \
     DATA_DIR=/data \
+    DOWNLOAD_DIR=/data/downloads \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    CHROMIUM_BIN=/usr/bin/chromium \
     LANG=C.UTF-8
 
 FROM runtime-base AS app
