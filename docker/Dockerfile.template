@@ -48,6 +48,10 @@ FROM runtime-base AS app
 WORKDIR /app
 ARG TARGETARCH
 COPY --chmod=755 mediago-linux-${TARGETARCH} /app/anime-go
+RUN ln -sf /app/anime-go /usr/local/bin/anime-go \
+    && ln -sf /app/anime-go /usr/local/bin/mediago \
+    && printf '#!/bin/sh\nexec /app/anime-go --clear-lock "$@"\n' > /usr/local/bin/clear-lock \
+    && chmod 755 /usr/local/bin/clear-lock
 COPY <<'MEDIAGO_HEALTHCHECK' /app/docker-healthcheck.py
 @@HEALTHCHECK@@
 MEDIAGO_HEALTHCHECK
