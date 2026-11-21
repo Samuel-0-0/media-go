@@ -85,12 +85,8 @@ jobs:
               sys.exit(1)
           HEALTHCHECK
 
-          cat > build/ghcr/docker-entrypoint.sh <<'ENTRYPOINT'
-          #!/bin/sh
-          set -eu
-          /opt/venv/bin/python /app/docker-healthcheck.py --snapshot
-          exec /usr/bin/tini -g -- /app/anime-go "$@"
-          ENTRYPOINT
+          tr -d '\r' < scripts/docker-entrypoint.sh > build/ghcr/docker-entrypoint.sh
+          chmod 755 build/ghcr/docker-entrypoint.sh
 
           cat > build/ghcr/verify-runtime.py <<'RUNTIME_CHECK'
           import argparse
