@@ -10,27 +10,34 @@ HOT_BAK="${HOT_BIN}.bak"
 
 pick_binary() {
   if [ -x "$HOT_BIN" ]; then
-    hot_ver="$("$HOT_BIN" --version 2>/dev/null | head -n 1 | tr -d '\r\n' || true)"
-    app_ver="$("$APP_BIN" --version 2>/dev/null | head -n 1 | tr -d '\r\n' || true)"
-    if [ -n "$hot_ver" ]; then
-      if [ -z "$app_ver" ]; then
-        printf '%s\n' "$HOT_BIN"
-        return
-      fi
-      prefer_hot="$(/opt/venv/bin/python -c '
-import re, sys
-def key(s):
-    s = re.sub(r"^[vV]", "", s.strip())
-    nums = [int(x) for x in re.findall(r"\d+", s.split("-")[0])]
-    while len(nums) < 4:
-        nums.append(0)
-    return tuple(nums[:4])
-print("1" if key(sys.argv[1]) >= key(sys.argv[2]) else "0")
-' "$hot_ver" "$app_ver" 2>/dev/null || echo "1")"
-      if [ "$prefer_hot" = "1" ]; then
-        printf '%s\n' "$HOT_BIN"
-        return
-      fi
+    prefer_hot="$(/opt/venv/bin/python -c '
+import re, subprocess, sys
+
+VER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:[-+].*)?$")
+
+def probe(path):
+    try:
+        r = subprocess.run([path, "--version"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3)
+        if r.returncode != 0:
+            return None
+        line = (r.stdout or "").strip().splitlines()[0].strip() if (r.stdout or "").strip() else ""
+        m = VER_RE.match(line)
+        if not m:
+            return None
+        return tuple(int(x or 0) for x in m.groups())
+    except Exception:
+        return None
+
+hot_k = probe(sys.argv[1])
+app_k = probe(sys.argv[2])
+if hot_k is not None and app_k is not None and hot_k > app_k:
+    print("1")
+else:
+    print("0")
+' "$HOT_BIN" "$APP_BIN" 2>/dev/null || echo "0")"
+    if [ "$prefer_hot" = "1" ]; then
+      printf '%s\n' "$HOT_BIN"
+      return
     fi
   fi
   printf '%s\n' "$APP_BIN"
