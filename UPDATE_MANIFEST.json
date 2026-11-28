@@ -1,16 +1,16 @@
 {
-    "version":  "2.8.12",
-    "min_runtime_rev":  "1.0.2",
-    "docker_upgrade_note":  "",
-    "updated_at":  "2026-11-27T15:21:22Z",
+    "version":  "2.8.16",
+    "min_runtime_rev":  "1.0.3",
+    "docker_upgrade_note":  "更新增加jar依赖",
+    "updated_at":  "2026-11-28T15:15:12Z",
     "assets":  {
                    "linux-amd64":  {
                                        "url":  "https://github.com/Samuel-0-0/media-go/raw/refs/heads/main/docker/mediago-linux-amd64",
-                                       "sha256":  "aadaf87b372715fd85f0bbc5350c4d981485e0c57bfc89fc01aa9079c50f0667"
+                                       "sha256":  "e08cdee17196b559aa4e6d6548cd5a9e041dad1d1fbe19b5d4a4da05b12a3f47"
                                    },
                    "linux-arm64":  {
                                        "url":  "https://github.com/Samuel-0-0/media-go/raw/refs/heads/main/docker/mediago-linux-arm64",
-                                       "sha256":  "f6a95c7f4fa628b03a699fc2c2f7cebbb59f2ec5b289bad5b32e11365b87b46a"
+                                       "sha256":  "fe0ca2dba5ff28772c0f5881783ae78ed102c289ddbbbf8ac34029a8ce758f35"
                                    }
                }
 }
